@@ -18,6 +18,8 @@
 #include <string>
 #include <cerrno>
 
+static const uint32_t max_size_hourly = 1024 * 1024 * 1024;
+
 namespace spdlog
 {
 namespace sinks
@@ -238,5 +240,63 @@ private:
 
 typedef daily_file_sink<std::mutex> daily_file_sink_mt;
 typedef daily_file_sink<details::null_mutex> daily_file_sink_st;
+
+/*
+ * Rotating file sink based on hour.
+ */
+template<class Mutex, class FileNameCalc = default_hourly_file_name_calculator>
+class hourly_file_sink SPDLOG_FINAL :public base_sink < Mutex >
+{
+public:
+    //create hourly file sink which rotates hourly
+    hourly_file_sink(const filename_t& base_filename)
+        : _base_filename(base_filename)
+    {
+        _next_rotation_tp();
+        _max_size = max_size_hourly;
+        _file_helper.open(FileNameCalc::calc_filename(_base_filename));
+        _current_size = _file_helper.size();
+    }
+
+protected:
+    void _sink_it(const details::log_msg& msg) override
+    {
+        _current_size += msg.formatted.size();
+
+        if (std::chrono::system_clock::now() >= _rotation_tp) {
+            _file_helper.open(FileNameCalc::calc_filename(_base_filename));
+            _current_size = msg.formatted.size();
+            _next_rotation_tp();
+        }
+
+        if (_current_size > _max_size) {
+            _file_helper.open(FileNameCalc::calc_filename(_base_filename));
+            _current_size = msg.formatted.size();
+        }
+        _file_helper.write(msg); 
+    }
+
+	void _flush() override
+	{
+		_file_helper.flush();
+	}
+
+private:
+    void _next_rotation_tp()
+    {
+        _now = std::chrono::system_clock::now();
+        _rotation_tp = _now + std::chrono::hours(1);
+    }
+
+    filename_t _base_filename;
+    std::chrono::system_clock::time_point _now;
+    std::chrono::system_clock::time_point _rotation_tp;
+
+    std::size_t _max_size;
+    std::size_t _current_size;
+    details::file_helper _file_helper;
+};
+
+typedef hourly_file_sink<std::mutex> hourly_file_sink_mt;
 }
 }
